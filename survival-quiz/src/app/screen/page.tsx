@@ -7,7 +7,7 @@ import type { GameState } from "@/lib/types";
 
 export default function ScreenPage() {
   useServerClock();
-  const game = useGame();
+  const game = useGame({ poll: true });
   const g = game.data;
 
   return (

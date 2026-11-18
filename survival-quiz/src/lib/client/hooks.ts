@@ -20,6 +20,8 @@ interface DocState<T> {
   /** キャッシュからの表示（＝サーバーと未同期・通信断の可能性） */
   fromCache: boolean;
   error: string | null;
+  /** 最後にスナップショットを受け取った時刻（端末時刻） */
+  receivedAt: number;
 }
 
 export function useDoc<T = DocumentData>(path: string | null): DocState<T> {
@@ -30,6 +32,7 @@ export function useDoc<T = DocumentData>(path: string | null): DocState<T> {
     loaded: false,
     fromCache: false,
     error: null,
+    receivedAt: 0,
   });
   useEffect(() => {
     if (!path) return;
@@ -43,12 +46,14 @@ export function useDoc<T = DocumentData>(path: string | null): DocState<T> {
           loaded: true,
           fromCache: snap.metadata.fromCache,
           error: null,
+          receivedAt: Date.now(),
         }),
-      (err) => setState({ path, data: null, loaded: true, fromCache: false, error: err.message }),
+      (err) =>
+        setState({ path, data: null, loaded: true, fromCache: false, error: err.message, receivedAt: Date.now() }),
     );
   }, [path]);
-  if (!path) return { data: null, loaded: true, fromCache: false, error: null };
-  if (state.path !== path) return { data: null, loaded: false, fromCache: false, error: null };
+  if (!path) return { data: null, loaded: true, fromCache: false, error: null, receivedAt: 0 };
+  if (state.path !== path) return { data: null, loaded: false, fromCache: false, error: null, receivedAt: 0 };
   return state;
 }
 
@@ -73,7 +78,61 @@ export function useCollection<T = DocumentData>(
   return state;
 }
 
-export const useGame = () => useDoc<GameState>("game/state");
+const POLL_MS = 4000;
+
+/**
+ * ゲーム状態（リアルタイム購読 ＋ 予備のポーリング）。
+ * リアルタイム購読が「つながっているのに更新が届かない」状態になっても、
+ * 数秒おきに /api/state（CDN で 1 秒キャッシュ）を確認し、より新しい状態があればそれを表示して
+ * 接続を張り直す。stale=true のときは購読が遅れている（ポーリングの値を表示中）。
+ */
+export function useGame(opts: { poll?: boolean } = {}) {
+  const live = useDoc<GameState>("game/state");
+  const [polled, setPolled] = useState<GameState | null>(null);
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const poll = opts.poll ?? false;
+
+  useEffect(() => {
+    if (!poll) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let lastReconnect = 0;
+    const tick = async () => {
+      clearTimeout(timer);
+      try {
+        const res = await fetch("/api/state");
+        const d = (await res.json()) as { game?: GameState | null };
+        const g = d.game;
+        const liveUpdatedAt = liveRef.current.data?.updatedAt ?? 0;
+        if (!stop && g && g.updatedAt > liveUpdatedAt) {
+          setPolled(g);
+          // 書き込みから 2 秒以上たっても購読に届いていなければ、接続が止まっていると判断
+          if (serverNow() - g.updatedAt > 2000 && Date.now() - lastReconnect > 15000) {
+            lastReconnect = Date.now();
+            reconnect();
+          }
+        }
+      } catch {
+        /* 次回再試行 */
+      }
+      if (!stop) timer = setTimeout(tick, POLL_MS);
+    };
+    timer = setTimeout(tick, 1500);
+    const onVis = () => document.visibilityState === "visible" && tick();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [poll]);
+
+  if (polled && (!live.data || polled.updatedAt > live.data.updatedAt)) {
+    return { ...live, data: polled, loaded: true, fromCache: false, stale: true };
+  }
+  return { ...live, stale: false };
+}
 
 export const useParticipants = (enabled = true) =>
   useCollection<Participant>("participants", enabled ? [] : null, [enabled]);

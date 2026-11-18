@@ -51,11 +51,38 @@ function useMyAnswers(gameId: string) {
   return { get, put };
 }
 
+/**
+ * 自分の参加者情報。リアルタイム購読が止まっている（game.stale）ときは、
+ * ゲーム状態が進むたびに API から取り直し、新しいほうを使う。
+ */
+function useMyParticipant(pid: string | null, game: ReturnType<typeof useGame>) {
+  const live = useDoc<Participant>(pid ? `participants/${pid}` : null);
+  const [fallback, setFallback] = useState<{ pid: string; data: Participant | null; at: number } | null>(null);
+  const staleKey = game.stale ? game.data?.updatedAt : null;
+  useEffect(() => {
+    if (!pid || staleKey == null) return;
+    let cancelled = false;
+    fetch(`/api/state?pid=${encodeURIComponent(pid)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { participant?: Participant | null }) => {
+        if (!cancelled && d.participant !== undefined) setFallback({ pid, data: d.participant, at: Date.now() });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [pid, staleKey]);
+  if (fallback && fallback.pid === pid && fallback.at > live.receivedAt) {
+    return { ...live, data: fallback.data, loaded: true, fromCache: false, error: null };
+  }
+  return live;
+}
+
 export default function PlayerPage() {
   useServerClock();
-  const game = useGame();
+  const game = useGame({ poll: true });
   const [me, setMe] = useLocalStorage<Identity>(STORAGE_KEY);
-  const p = useDoc<Participant>(me ? `participants/${me.participantId}` : null);
+  const p = useMyParticipant(me ? me.participantId : null, game);
   const conn = useConnectionWatch(game.fromCache);
 
   // ゲームがリセットされた／退場になった場合は端末の参加情報を破棄する
@@ -90,7 +117,7 @@ export default function PlayerPage() {
           <span className="name">2択サバイバルクイズ</span>
         )}
       </header>
-      {conn.unstable && game.loaded && (
+      {(conn.unstable || game.stale) && game.loaded && (
         <div className="conn-banner" role="status">
           {conn.online ? "サーバーと再接続しています…" : "通信が切れています。電波の良い場所でお待ちください"}
         </div>

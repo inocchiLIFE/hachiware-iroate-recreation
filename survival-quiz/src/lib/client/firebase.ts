@@ -23,8 +23,10 @@ export function clientDb(): Firestore {
       appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
     });
   try {
-    // 会場 Wi-Fi やプロキシで WebChannel が詰まる場合に自動でロングポーリングへ切り替える
-    db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+    // iPhone（Safari・LINE などすべて WebKit）では、ストリーミング接続が「つながったまま
+    // 更新が届かない」状態になることがあるため、全端末でロングポーリングを使う。
+    // 会場 Wi-Fi やプロキシ環境でも最も安定する方式（遅延の差は体感できない程度）。
+    db = initializeFirestore(app, { experimentalForceLongPolling: true });
   } catch {
     db = getFirestore(app);
   }

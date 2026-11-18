@@ -68,7 +68,7 @@ function Login({ onOk }: { onOk: () => void }) {
 // ---------------------------------------------------------------------------
 function Dashboard({ onLogout }: { onLogout: () => void }) {
   useServerClock();
-  const game = useGame();
+  const game = useGame({ poll: true });
   const [tab, setTab] = useState<"questions" | "participants" | "settings">("participants");
   const [msg, setMsg] = useState<Msg>(null);
   const [questions, setQuestions] = useState<Question[] | null>(null);
