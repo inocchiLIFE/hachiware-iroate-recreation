@@ -125,6 +125,7 @@ Firebase を使わずに試したい場合は、エミュレーターで動か�
    | `FIREBASE_PROJECT_ID` | 手順5 |
    | `FIREBASE_CLIENT_EMAIL` | 手順5 |
    | `FIREBASE_PRIVATE_KEY` | 手順5（`-----BEGIN PRIVATE KEY-----` から `-----END PRIVATE KEY-----\n` まで。両端のダブルクォートは不要） |
+   | （かんたんな方法）`FIREBASE_SERVICE_ACCOUNT` | 上の `FIREBASE_CLIENT_EMAIL`・`FIREBASE_PRIVATE_KEY` の代わりに、手順5でダウンロードした JSON ファイルを「メモ帳」などで開き、**中身をすべて**貼り付けても動きます |
    | `ADMIN_PASSWORD` | 管理画面のパスワード（推測されにくい長いもの） |
    | `ADMIN_SESSION_SECRET` | 任意。長いランダム文字列（未設定でも動きます） |
    | `NEXT_PUBLIC_JOIN_URL` | 任意。QRコードに載せる URL（未設定ならスクリーンを開いているドメイン） |
