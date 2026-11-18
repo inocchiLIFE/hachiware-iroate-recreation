@@ -44,6 +44,9 @@ function useMyAnswers(gameId: string) {
       } catch {
         /* noop */
       }
+      const prev = cur[String(a.q)];
+      // 選び直しで通信が追い越した場合に古い回答で上書きしない
+      if (prev && (prev.seq ?? 0) > (a.seq ?? 0)) return;
       save({ ...cur, [String(a.q)]: a });
     },
     [key, save],
@@ -192,7 +195,7 @@ function JoinForm({ onJoined }: { onJoined: (id: Identity) => void }) {
 function Rules() {
   return (
     <ul className="rules">
-      <li>問題ごとに A か B をタップ（制限時間内・変更不可）</li>
+      <li>問題ごとに A か B をタップ（制限時間内）</li>
       <li>間違えた人・時間内に答えなかった人は脱落</li>
       <li>脱落後も観戦モードで最後まで楽しめます</li>
     </ul>
@@ -264,7 +267,7 @@ function QuestionView({ game, p, me }: { game: GameState; p: Participant; me: Id
   const mine = useMyAnswers(game.gameId);
   const myAnswer = { data: mine.get(cur.index) };
   const [pending, setPending] = useState<Pending | null>(null);
-  const sendingRef = useRef(false);
+  const seqRef = useRef(0);
   const now = useNow(game.status === "question", 100);
 
   const before = game.status === "question" && now < cur.startedAt;
@@ -272,43 +275,49 @@ function QuestionView({ game, p, me }: { game: GameState; p: Participant; me: Id
   const open = game.status === "question" && !before && ms > 0;
   const spectator = p.status !== "alive";
   const canAnswer = !spectator || game.settings.spectatorAnswer;
-  const chosen: Choice | null = myAnswer.data?.choice ?? (pending?.state === "sending" ? pending.choice : null);
+  const allowChange = game.settings.allowChange !== false;
+  // 送信中ならその選択、そうでなければサーバーが受理した回答を表示
+  const chosen: Choice | null = pending?.state === "sending" ? pending.choice : (myAnswer.data?.choice ?? null);
 
   const submit = useCallback(
     async (choice: Choice) => {
-      if (sendingRef.current || chosen) return;
-      sendingRef.current = true;
+      if (chosen === choice) return;
+      if (chosen && !allowChange) return;
+      // 選び直しの順番をサーバーに伝える番号（大きいものだけ反映される）
+      const seq = Math.max(seqRef.current, myAnswer.data?.seq ?? 0) + 1;
+      seqRef.current = seq;
       navigator.vibrate?.(30);
       setPending({ choice, state: "sending" });
       const giveUpAt = cur.deadlineAt + game.settings.graceMs + 3000;
       for (let attempt = 0; ; attempt++) {
+        if (seqRef.current !== seq) return; // もっと新しいタップがあった
         try {
           const res = await api<{ answer?: Answer }>("/api/answer", {
             pid: me.participantId,
             token: me.token,
             q: cur.index,
             choice,
+            seq,
           });
-          if ((res.ok || res.code === "already_answered") && res.data.answer) {
-            // already_answered（リロード前に送信済み）の場合はサーバー側の回答が返る
-            mine.put(res.data.answer);
-            setPending(null);
-          } else {
-            setPending({ choice, state: "error", message: res.message ?? "回答を送信できませんでした" });
-          }
-          break;
+          // サーバーが返した「現在の回答」を保存（締め切り後のエラーでも、受理済みの回答が返る）
+          if (res.data.answer) mine.put(res.data.answer);
+          if (seqRef.current !== seq) return;
+          if (res.ok || res.code === "already_answered") setPending(null);
+          else setPending({ choice, state: "error", message: res.message ?? "回答を送信できませんでした" });
+          return;
         } catch {
           // 通信エラー：締め切りまでリトライ（同じ回答の再送はサーバーで重複扱いになるだけ）
           if (serverNow() > giveUpAt) {
-            setPending({ choice, state: "error", message: "通信できず、回答を送信できませんでした" });
-            break;
+            if (seqRef.current === seq) {
+              setPending({ choice, state: "error", message: "通信できず、回答を送信できませんでした" });
+            }
+            return;
           }
           await new Promise((r) => setTimeout(r, Math.min(300 * (attempt + 1), 1000)));
         }
       }
-      sendingRef.current = false;
     },
-    [chosen, cur.deadlineAt, cur.index, game.settings.graceMs, me.participantId, me.token, mine],
+    [chosen, allowChange, cur.deadlineAt, cur.index, game.settings.graceMs, me.participantId, me.token, mine, myAnswer.data?.seq],
   );
 
   if (before) {
@@ -323,15 +332,18 @@ function QuestionView({ game, p, me }: { game: GameState; p: Participant; me: Id
     );
   }
 
+  const changeHint = allowChange ? "締め切りまで選び直せます" : "変更はできません";
   let footer: React.ReactNode;
-  if (myAnswer.data) {
-    footer = myAnswer.data.spectator ? "参考回答しました（判定には影響しません）" : "回答しました！ 結果発表をお待ちください";
-  } else if (pending?.state === "sending") footer = "送信中…";
+  if (pending?.state === "sending") footer = "送信中…";
   else if (pending?.state === "error") footer = <span className="error">{pending.message}</span>;
-  else if (!open) footer = spectator ? "回答締め切り" : "回答締め切り — 時間内に回答がありませんでした";
+  else if (myAnswer.data) {
+    if (myAnswer.data.spectator) footer = "参考回答しました（判定には影響しません）";
+    else if (open && allowChange) footer = "回答しました（締め切りまで選び直せます）";
+    else footer = "回答しました！ 結果発表をお待ちください";
+  } else if (!open) footer = spectator ? "回答締め切り" : "回答締め切り — 時間内に回答がありませんでした";
   else if (!canAnswer) footer = "観戦中のため回答できません";
-  else if (spectator) footer = "観戦中：参考回答できます（判定には影響しません）";
-  else footer = "タップで回答（変更はできません）";
+  else if (spectator) footer = `観戦中：参考回答できます（判定には影響しません）`;
+  else footer = `タップで回答（${changeHint}）`;
 
   return (
     <>
@@ -350,7 +362,7 @@ function QuestionView({ game, p, me }: { game: GameState; p: Participant; me: Id
           <button
             key={c}
             className={`choice ${c.toLowerCase()} ${chosen === c ? "picked" : ""}`}
-            disabled={!open || !canAnswer || (chosen !== null && chosen !== c) || pending?.state === "error"}
+            disabled={!open || !canAnswer || (!allowChange && chosen !== null && chosen !== c)}
             onClick={() => submit(c)}
             aria-pressed={chosen === c}
           >

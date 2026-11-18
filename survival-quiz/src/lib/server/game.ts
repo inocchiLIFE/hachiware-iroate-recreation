@@ -164,9 +164,10 @@ function verifyToken(tokenHash: unknown, token: unknown): boolean {
  * - 1 人 1 問 1 回答（answers/{q}_{pid} を create で作成するため、変更は物理的に不可）
  * - 同じ選択肢での再送（通信リトライ）は成功扱いで既存の回答を返す
  */
-export async function submitAnswer(input: { pid: unknown; token: unknown; q: unknown; choice: unknown }) {
+export async function submitAnswer(input: { pid: unknown; token: unknown; q: unknown; choice: unknown; seq?: unknown }) {
   const receivedAt = Date.now();
   const { pid, token, q, choice } = input;
+  const seq = typeof input.seq === "number" && Number.isFinite(input.seq) ? input.seq : 0;
   if (typeof pid !== "string" || !/^[\w-]{6,40}$/.test(pid)) throw new AppError("bad_request", "参加者IDが不正です");
   if (typeof q !== "number" || !Number.isInteger(q)) throw new AppError("bad_request", "問題番号が不正です");
   if (choice !== "A" && choice !== "B") throw new AppError("bad_request", "選択肢が不正です");
@@ -179,50 +180,52 @@ export async function submitAnswer(input: { pid: unknown; token: unknown; q: unk
   }
   const game = gSnap.data() as GameState | undefined;
   const p = pSnap.data() as Participant;
+  const existing = aSnap.exists ? (aSnap.data() as Answer) : null;
 
-  if (aSnap.exists) return existingAnswer(aSnap.data() as Answer, choice);
+  // 同じ回答の再送（通信リトライ）は、締め切り後でも成功扱い
+  if (existing && existing.choice === choice) return { ok: true, answer: existing, duplicate: true };
 
   const cur = game?.current;
   if (!game || game.status !== "question" || !cur || cur.index !== q) {
+    if (existing) throw new AppError("closed", "締め切り後のため選び直せません", 409, { answer: existing });
     throw new AppError("not_accepting", "現在この問題の回答は受け付けていません", 409);
   }
   if (p.gameId !== game.gameId) throw new AppError("unknown_participant", "参加者情報が古くなっています", 401);
   // 端末の時計補正の誤差を見込んで、表示開始のわずか前から受け付ける
   if (receivedAt < cur.startedAt - 1000) throw new AppError("too_early", "まだ出題前です", 409);
   if (receivedAt > effectiveDeadline(cur, game.settings)) {
-    throw new AppError("late", "締め切り後に届いたため無効です", 409);
+    throw new AppError("late", "締め切り後に届いたため無効です", 409, existing ? { answer: existing } : undefined);
   }
   const spectator = p.status !== "alive";
   if (spectator && !game.settings.spectatorAnswer) {
     throw new AppError("spectator", "脱落後は回答できません", 403);
   }
+  const elapsedMs = Math.max(0, receivedAt - cur.startedAt);
 
-  const answer: Answer = {
-    pid,
-    gameId: game.gameId,
-    q,
-    choice,
-    answeredAt: receivedAt,
-    elapsedMs: Math.max(0, receivedAt - cur.startedAt),
-    spectator,
-  };
-  try {
-    await ansRef.create(answer);
-  } catch (e) {
-    if ((e as { code?: number }).code === 6) {
-      // 同時リトライで先に作成済み
-      return existingAnswer((await ansRef.get()).data() as Answer, choice);
+  if (!existing) {
+    const answer: Answer = { pid, gameId: game.gameId, q, choice, answeredAt: receivedAt, elapsedMs, spectator, seq, changes: 0 };
+    try {
+      await ansRef.create(answer);
+      return { ok: true, answer };
+    } catch (e) {
+      // 同時に別の選択肢が届いて先に作成された → 選び直しとして扱う
+      if ((e as { code?: number }).code !== 6) throw e;
     }
-    throw e;
   }
-  return { ok: true, answer };
-}
-
-function existingAnswer(a: Answer, choice: Choice) {
-  if (a.choice !== choice) {
+  if (game.settings.allowChange === false) {
+    const a = existing ?? ((await ansRef.get()).data() as Answer);
+    if (a.choice === choice) return { ok: true, answer: a, duplicate: true };
     throw new AppError("already_answered", "回答の変更はできません", 409, { answer: a });
   }
-  return { ok: true, answer: a, duplicate: true };
+  // 選び直し：端末の送信番号が新しいものだけ反映（通信の追い越しで古い選択に戻らないように）
+  const answer = await r.db.runTransaction(async (tx) => {
+    const a = (await tx.get(ansRef)).data() as Answer;
+    if (a.choice === choice || seq <= (a.seq ?? 0)) return a;
+    const next: Answer = { ...a, choice, answeredAt: receivedAt, elapsedMs, seq, changes: (a.changes ?? 0) + 1 };
+    tx.set(ansRef, next);
+    return next;
+  });
+  return { ok: true, answer };
 }
 
 /** 回答済み人数（集計クエリ count() は 1000 件まで読み取り 1 回分なので、ポーリングでも安い） */
@@ -514,6 +517,7 @@ export async function updateSettings(input: Partial<GameSettings>) {
     s.graceMs = Math.round(v);
   }
   if (input.spectatorAnswer !== undefined) s.spectatorAnswer = Boolean(input.spectatorAnswer);
+  if (input.allowChange !== undefined) s.allowChange = Boolean(input.allowChange);
   await r.game.update({ settings: s, updatedAt: Date.now() });
   return s;
 }

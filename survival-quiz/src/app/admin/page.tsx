@@ -646,6 +646,9 @@ function Settings({
           <input type="number" min={0} max={3000} step={100} value={s.graceMs} onChange={(e) => setS({ ...s, graceMs: Number(e.target.value) })} style={{ width: 100 }} />
         </label>
         <label>
+          <input type="checkbox" checked={s.allowChange !== false} onChange={(e) => setS({ ...s, allowChange: e.target.checked })} /> 締め切りまで回答を選び直せる（最後に選んだものが有効）
+        </label>
+        <label>
           <input type="checkbox" checked={s.spectatorAnswer} onChange={(e) => setS({ ...s, spectatorAnswer: e.target.checked })} /> 脱落者も参考回答できる（判定には影響なし）
         </label>
         <button

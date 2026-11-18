@@ -26,6 +26,8 @@ export interface GameSettings {
   graceMs: number;
   /** 脱落者（観戦者）も回答ボタンを押せるか（判定には影響しない） */
   spectatorAnswer: boolean;
+  /** 締め切りまで回答を選び直せるか（最後に選んだものが有効） */
+  allowChange: boolean;
 }
 
 export interface CurrentQuestion {
@@ -119,6 +121,10 @@ export interface Answer {
   elapsedMs: number;
   /** 回答時点で脱落済みだった（判定対象外の参考回答） */
   spectator: boolean;
+  /** 端末側の送信番号（選び直しの順序を保証するため。大きいものだけ反映） */
+  seq: number;
+  /** 選び直した回数 */
+  changes: number;
 }
 
 export interface Question {
@@ -136,6 +142,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   timeLimitSec: 10,
   graceMs: 500,
   spectatorAnswer: true,
+  allowChange: true,
 };
 
 /** 出題ボタンを押してから全端末で問題が表示されるまでの待ち時間（ms） */

@@ -208,13 +208,27 @@ class Bot {
       choice = Math.random() < ACCURACY ? right : right === "A" ? "B" : "A";
     } else choice = Math.random() < 0.5 ? "A" : "B";
 
-    setTimeout(async () => {
+    // 約 20% のボットは途中で選び直す（締め切り前に反対の選択肢を送る）
+    const change = !late && Math.random() < 0.2;
+    const changeAt = at + rand(300, Math.max(400, cur.deadlineAt - at - 500));
+    const send = async (c, seq) => {
       const t0 = Date.now();
+      const res = await post("/api/answer", { pid: this.id, token: this.token, q: index, choice: c, seq });
+      metrics.answer.push(Date.now() - t0);
+      if (!res.ok) addErr(`answer:${res.data.code ?? res.status}${late ? "(意図的な遅刻)" : ""}`);
+      return res;
+    };
+    setTimeout(async () => {
       try {
-        const res = await post("/api/answer", { pid: this.id, token: this.token, q: index, choice });
-        metrics.answer.push(Date.now() - t0);
-        if (!res.ok) addErr(`answer:${res.data.code ?? res.status}${late ? "(意図的な遅刻)" : ""}`);
-        this.answered.set(index, { choice, accepted: res.ok, code: res.data.code, aliveAtAnswer: isAlive, late });
+        let res = await send(choice, 1);
+        if (change && res.ok) {
+          await sleep(changeAt - serverNow());
+          res = await send(choice === "A" ? "B" : "A", 2);
+          if (res.ok) metrics.changes = (metrics.changes ?? 0) + 1;
+        }
+        // サーバーが返した最終的な回答（選び直し後）を記録
+        const final = res.data.answer?.choice ?? choice;
+        this.answered.set(index, { choice: final, accepted: Boolean(res.data.answer), code: res.data.code, aliveAtAnswer: isAlive, late });
       } catch (e) {
         addErr(`answer:network`);
         this.answered.set(index, { choice, accepted: false, code: "network", aliveAtAnswer: isAlive });
@@ -376,6 +390,7 @@ async function main() {
   console.log(summary("参加登録 API", metrics.join));
   console.log(summary("回答 API", metrics.answer));
   for (const [status, arr] of Object.entries(metrics.propagation)) console.log(summary(`反映遅延: ${status}`, arr));
+  if (metrics.changes) console.log(`選び直し: ${metrics.changes}回（最終回答で判定されているかを整合性チェックで確認）`);
   console.log("エラー内訳:", Object.keys(metrics.errors).length ? metrics.errors : "なし");
   if (AUTO) {
     console.log(`判定の整合性チェック: OK ${checks.ok} / NG ${checks.ng}`);

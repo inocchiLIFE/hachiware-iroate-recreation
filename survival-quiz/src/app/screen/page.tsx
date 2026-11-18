@@ -1,17 +1,56 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Timer } from "@/components/Timer";
-import { useAnsweredCount, useGame, useNow, useParticipants, useServerClock } from "@/lib/client/hooks";
+import {
+  serverNow,
+  useAnsweredCount,
+  useGame,
+  useNow,
+  useParticipants,
+  useServerClock,
+} from "@/lib/client/hooks";
+import * as sfx from "@/lib/client/sound";
 import type { GameState } from "@/lib/types";
 
 export default function ScreenPage() {
   useServerClock();
   const game = useGame({ poll: true });
   const g = game.data;
+  const [soundOn, setSoundOn] = useState(false);
+  const [vol, setVol] = useState(0.8);
+  useScreenSounds(g, soundOn);
 
   return (
     <main className="screen">
+      <div className={`sound-ctl ${soundOn ? "on" : "off"}`}>
+        <button
+          onClick={() => {
+            if (soundOn) return setSoundOn(false);
+            if (sfx.unlock()) {
+              setSoundOn(true);
+              setTimeout(sfx.sfxTest, 50);
+            }
+          }}
+        >
+          {soundOn ? "🔊 音あり" : "🔇 クリックで音を出す"}
+        </button>
+        {soundOn && (
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={vol}
+            aria-label="音量"
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setVol(v);
+              sfx.setVolume(v);
+            }}
+          />
+        )}
+      </div>
       <div className="top">
         <span className="logo">2択サバイバルクイズ</span>
         {g && g.status !== "lobby" && g.status !== "finished" && <span className="num">生存者 {g.aliveCount}人</span>}
@@ -19,6 +58,64 @@ export default function ScreenPage() {
       <div className="body">{!g ? <p className="center muted">接続中…</p> : <Phase g={g} />}</div>
     </main>
   );
+}
+
+/** 進行に合わせて効果音を鳴らす（音をオンにしたスクリーンだけ） */
+function useScreenSounds(g: GameState | null, on: boolean) {
+  const prevKey = useRef<string | null>(null);
+  const fired = useRef<{ q: string; marks: Set<string> }>({ q: "", marks: new Set() });
+  const status = g?.status;
+  const index = g?.current?.index ?? -1;
+  const key = g ? `${g.gameId}:${g.status}:${index}` : null;
+
+  // 状態が切り替わった瞬間の音
+  useEffect(() => {
+    if (!g || !key) return;
+    const prev = prevKey.current;
+    prevKey.current = key;
+    if (!on || prev === null || prev === key) return; // 開いた直後は鳴らさない
+    if (g.status === "question") sfx.sfxQuestion();
+    if (g.status === "revealed") sfx.sfxReveal(Boolean(g.reveal?.allRevived));
+    if (g.status === "finished") sfx.sfxWinner();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, on]);
+
+  // カウントイン・チクタク・時間切れ
+  const cur = g?.current;
+  const closedAt = cur?.closedAt ?? null;
+  useEffect(() => {
+    if (!on || !g || !cur || (status !== "question" && status !== "closed")) return;
+    const qKey = `${g.gameId}:${cur.index}`;
+    if (fired.current.q !== qKey) fired.current = { q: qKey, marks: new Set() };
+    const marks = fired.current.marks;
+    const fire = (k: string, fn: () => void) => {
+      if (!marks.has(k)) {
+        marks.add(k);
+        fn();
+      }
+    };
+    const tick = () => {
+      const t = serverNow();
+      if (t < cur.startedAt) {
+        const c = Math.ceil((cur.startedAt - t) / 1000);
+        if (c <= 3) fire(`in${c}`, () => sfx.sfxCountIn(false));
+        return;
+      }
+      const end = closedAt != null ? Math.min(cur.deadlineAt, closedAt) : cur.deadlineAt;
+      if (t >= end || status === "closed") {
+        // 出題中に立ち会っていた場合だけブザー（途中で開いた・音をオンにした直後は鳴らさない）
+        if (marks.size > 0) fire("up", sfx.sfxTimeUp);
+        return;
+      }
+      fire("go", () => sfx.sfxCountIn(true));
+      const r = Math.ceil((end - t) / 1000);
+      fire(`r${r}`, () => sfx.sfxThinking(r));
+    };
+    tick();
+    const id = setInterval(tick, 50);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, status, g?.gameId, cur?.index, cur?.startedAt, cur?.deadlineAt, closedAt]);
 }
 
 function Phase({ g }: { g: GameState }) {
@@ -55,6 +152,13 @@ function Lobby({ g }: { g: GameState }) {
     QRCode.toDataURL(joinUrl, { width: 720, margin: 1, errorCorrectionLevel: "M" }).then(setQr);
   }, []);
   const count = participants.docs.length;
+  // 参加者が増えたら「ポン」（音がオンのときだけ鳴る）
+  const prevCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (!participants.loaded) return;
+    if (prevCount.current !== null && count > prevCount.current) sfx.sfxJoin();
+    prevCount.current = count;
+  }, [count, participants.loaded]);
   return (
     <div className="lobby">
       <div style={{ display: "flex", flexDirection: "column", gap: "3vh" }}>
