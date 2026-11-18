@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// ブラウザ（参加者・スクリーン・管理画面）は「読み取り専用」。
+// 書き込みはすべて Next.js の API ルート（Firebase Admin SDK）経由で行い、
+// 締め切り判定・回答変更の禁止・脱落判定はサーバー側で強制する。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 進行状態（出題中の問題文・締切時刻・正解発表の集計など）
+    match /game/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // 参加者（ニックネーム・生存/脱落・累計回答時間）
+    match /participants/{participantId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // 回答（スクリーンの「回答済み人数」表示と、本人の回答確認に使用）
+    match /answers/{answerId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // questions（正解を含む）・secrets（参加者トークン）・nicknames は非公開
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

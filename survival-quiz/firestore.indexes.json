@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "answers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "q", "order": "ASCENDING" },
+        { "fieldPath": "spectator", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
