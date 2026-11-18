@@ -105,15 +105,7 @@ const now = () => (ctx ? ctx.currentTime + 0.01 : 0);
 // 効果音
 // ---------------------------------------------------------------------------
 
-/** 参加者が増えたときの軽い「ポン」 */
-export function sfxJoin() {
-  if (!isReady()) return;
-  const t = now();
-  tone(NOTE.E6, t, 0.09, { type: "sine", gain: 0.12 });
-  tone(NOTE.B6, t + 0.05, 0.12, { type: "sine", gain: 0.1 });
-}
-
-/** 出題（カウントイン開始時）：駆け上がるジングル */
+/** 出題：駆け上がるジングル */
 export function sfxQuestion() {
   if (!isReady()) return;
   const t = now();
@@ -122,12 +114,6 @@ export function sfxQuestion() {
   const hit = t + run.length * 0.07 + 0.02;
   ["C5", "E5", "G5", "C6"].forEach((n) => brass(NOTE[n], hit, 0.55, 0.07));
   noise(hit, 0.35, 0.12, 5000);
-}
-
-/** カウントイン（3・2・1）の「ピッ」 */
-export function sfxCountIn(last: boolean) {
-  if (!isReady()) return;
-  tone(last ? NOTE.A5 : NOTE.A4, now(), last ? 0.35 : 0.15, { type: "square", gain: 0.1, filter: 4000 });
 }
 
 /**

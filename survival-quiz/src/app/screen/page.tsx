@@ -80,7 +80,7 @@ function useScreenSounds(g: GameState | null, on: boolean) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, on]);
 
-  // カウントイン・チクタク・時間切れ
+  // チクタク・時間切れ
   const cur = g?.current;
   const closedAt = cur?.closedAt ?? null;
   useEffect(() => {
@@ -96,18 +96,13 @@ function useScreenSounds(g: GameState | null, on: boolean) {
     };
     const tick = () => {
       const t = serverNow();
-      if (t < cur.startedAt) {
-        const c = Math.ceil((cur.startedAt - t) / 1000);
-        if (c <= 3) fire(`in${c}`, () => sfx.sfxCountIn(false));
-        return;
-      }
+      if (t < cur.startedAt) return;
       const end = closedAt != null ? Math.min(cur.deadlineAt, closedAt) : cur.deadlineAt;
       if (t >= end || status === "closed") {
         // 出題中に立ち会っていた場合だけブザー（途中で開いた・音をオンにした直後は鳴らさない）
         if (marks.size > 0) fire("up", sfx.sfxTimeUp);
         return;
       }
-      fire("go", () => sfx.sfxCountIn(true));
       const r = Math.ceil((end - t) / 1000);
       fire(`r${r}`, () => sfx.sfxThinking(r));
     };
@@ -152,13 +147,6 @@ function Lobby({ g }: { g: GameState }) {
     QRCode.toDataURL(joinUrl, { width: 720, margin: 1, errorCorrectionLevel: "M" }).then(setQr);
   }, []);
   const count = participants.docs.length;
-  // 参加者が増えたら「ポン」（音がオンのときだけ鳴る）
-  const prevCount = useRef<number | null>(null);
-  useEffect(() => {
-    if (!participants.loaded) return;
-    if (prevCount.current !== null && count > prevCount.current) sfx.sfxJoin();
-    prevCount.current = count;
-  }, [count, participants.loaded]);
   return (
     <div className="lobby">
       <div style={{ display: "flex", flexDirection: "column", gap: "3vh" }}>
